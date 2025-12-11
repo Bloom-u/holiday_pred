@@ -34,9 +34,11 @@ env/
 .DS_Store
 
 # Data (large files - keep locally, don't push)
+data/
 *.pkl
 *.pth
-data/*.pkl
+*.csv
+*.xlsx
 models/**/*.pth
 models/**/*.pkl
 
