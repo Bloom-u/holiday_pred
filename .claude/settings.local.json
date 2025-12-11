@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Bash(ls:*)",
+      "Bash(grep:*)",
+      "Bash(pkill:*)",
+      "Bash(/opt/anaconda3/bin/python:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
