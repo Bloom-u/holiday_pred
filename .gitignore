@@ -35,6 +35,7 @@ env/
 
 # Data (large files - keep locally, don't push)
 data/
+docs/
 *.pkl
 *.pth
 *.csv
