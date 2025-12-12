@@ -195,8 +195,128 @@ def plot_overall_performance(results, output_dir='./figs_v2'):
     plt.close()
 
 
-# 复用原来的plot_holiday_comparison和plot_specific_holiday
-from visualization import plot_holiday_comparison, plot_specific_holiday
+def plot_holiday_comparison(results, output_dir='./figs_v2'):
+    """绘制节假日预测对比图"""
+    dates = results['dates']
+    true_values = results['true_values']
+    predictions = results['predictions']
+    holiday_types = results['holiday_types']
+    holiday_names = results['holiday_names']
+
+    # 创建图表
+    fig, axes = plt.subplots(2, 1, figsize=(14, 10))
+
+    # 1. 按节假日类型分组的误差对比
+    ax = axes[0]
+    holiday_type_names = {
+        0: '平日', 1: '周末', 2: '元旦', 3: '春节', 4: '清明',
+        5: '劳动节', 6: '端午', 7: '中秋', 8: '国庆节', 9: '调休', 10: '其他'
+    }
+
+    unique_types = np.unique(holiday_types)
+    type_maes = []
+    type_labels = []
+    type_counts = []
+
+    for ht in unique_types:
+        mask = holiday_types == ht
+        if mask.sum() > 0:
+            mae = np.mean(np.abs(predictions[mask] - true_values[mask]))
+            type_maes.append(mae)
+            type_labels.append(holiday_type_names.get(ht, f'类型{ht}'))
+            type_counts.append(mask.sum())
+
+    colors = plt.cm.Set3(np.linspace(0, 1, len(type_labels)))
+    bars = ax.bar(range(len(type_labels)), type_maes, color=colors, edgecolor='black', linewidth=0.5)
+
+    # 添加数据标签
+    for bar, mae, cnt in zip(bars, type_maes, type_counts):
+        ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 10,
+                f'{mae:.0f}\n(n={cnt})', ha='center', va='bottom', fontsize=9)
+
+    ax.set_xticks(range(len(type_labels)))
+    ax.set_xticklabels(type_labels, rotation=45, ha='right')
+    ax.set_ylabel('平均绝对误差 (MAE)', fontsize=11)
+    ax.set_title('各类型日期预测误差对比', fontsize=13, fontweight='bold')
+    ax.grid(True, alpha=0.3, axis='y')
+
+    # 2. 节假日 vs 平日 时间趋势
+    ax = axes[1]
+    holiday_mask = holiday_types > 1
+    normal_mask = holiday_types <= 1
+
+    errors = np.abs(predictions - true_values)
+
+    if normal_mask.sum() > 0:
+        ax.scatter(dates[normal_mask], errors[normal_mask],
+                   alpha=0.5, s=20, c='blue', label=f'平日 (MAE={errors[normal_mask].mean():.0f})')
+    if holiday_mask.sum() > 0:
+        ax.scatter(dates[holiday_mask], errors[holiday_mask],
+                   alpha=0.7, s=50, c='red', marker='^', label=f'节假日 (MAE={errors[holiday_mask].mean():.0f})')
+
+    ax.set_xlabel('日期', fontsize=11)
+    ax.set_ylabel('绝对误差', fontsize=11)
+    ax.set_title('预测误差时间分布', fontsize=13, fontweight='bold')
+    ax.legend(fontsize=10)
+    ax.grid(True, alpha=0.3)
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+    plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
+
+    plt.tight_layout()
+    os.makedirs(output_dir, exist_ok=True)
+    plt.savefig(f'{output_dir}/holiday_comparison.png', dpi=150, bbox_inches='tight')
+    print(f"  保存: {output_dir}/holiday_comparison.png")
+    plt.close()
+
+
+def plot_specific_holiday(results, holiday_name, output_dir='./figs_v2'):
+    """绘制特定节假日详细分析图"""
+    dates = results['dates']
+    true_values = results['true_values']
+    predictions = results['predictions']
+    holiday_names_arr = results['holiday_names']
+
+    # 筛选该节假日的数据
+    mask = np.array([holiday_name in str(name) for name in holiday_names_arr])
+
+    if mask.sum() == 0:
+        print(f"  未找到{holiday_name}数据，跳过")
+        return
+
+    h_dates = dates[mask]
+    h_true = true_values[mask]
+    h_pred = predictions[mask]
+
+    fig, axes = plt.subplots(2, 1, figsize=(12, 8))
+
+    # 1. 时间序列对比
+    ax = axes[0]
+    ax.plot(h_dates, h_true, 'b-o', label='真实值', linewidth=2, markersize=6)
+    ax.plot(h_dates, h_pred, 'r--s', label='预测值', linewidth=2, markersize=6)
+    ax.set_xlabel('日期', fontsize=11)
+    ax.set_ylabel('交通流量', fontsize=11)
+    ax.set_title(f'{holiday_name}预测对比', fontsize=13, fontweight='bold')
+    ax.legend(fontsize=10)
+    ax.grid(True, alpha=0.3)
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%m-%d'))
+    plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
+
+    # 2. 误差分析
+    ax = axes[1]
+    errors = h_pred - h_true
+    colors = ['green' if e < 0 else 'red' for e in errors]
+    bars = ax.bar(range(len(errors)), errors, color=colors, alpha=0.7, edgecolor='black')
+    ax.axhline(0, color='black', linewidth=1)
+    ax.set_xlabel('样本序号', fontsize=11)
+    ax.set_ylabel('预测误差 (正=高估, 负=低估)', fontsize=11)
+    ax.set_title(f'{holiday_name}预测误差详情 (MAE={np.abs(errors).mean():.0f})', fontsize=13, fontweight='bold')
+    ax.grid(True, alpha=0.3, axis='y')
+
+    plt.tight_layout()
+    safe_name = holiday_name.replace(' ', '_')
+    plt.savefig(f'{output_dir}/{safe_name}_analysis.png', dpi=150, bbox_inches='tight')
+    print(f"  保存: {output_dir}/{safe_name}_analysis.png")
+    plt.close()
 
 
 def generate_all_visualizations_v2(model, df, scalers, lag_scaler, dataset_config,
