@@ -46,6 +46,8 @@ def plot_full_year(pred):
     window_start = cny_2025 - pd.Timedelta(days=25)
     window_end = cny_2025 + pd.Timedelta(days=15)
 
+    has_decomposed = "pred_tminus2_decomposed" in pred.columns
+
     fig, ax = plt.subplots(figsize=(15, 6))
     ax.plot(
         pred["date"],
@@ -57,7 +59,7 @@ def plot_full_year(pred):
         marker="o",
         markersize=4,
         markevery=5,
-    )
+        )
     if "pred_tminus2" in pred.columns:
         ax.plot(
             pred["date"],
@@ -82,6 +84,29 @@ def plot_full_year(pred):
             marker="D",
             markersize=3,
             markevery=5,
+        )
+    if "pred_tminus2_decomposed" in pred.columns:
+        ax.plot(
+            pred["date"],
+            pred["pred_tminus2_decomposed"],
+            color="#2ca02c",
+            linestyle="--",
+            label="pred_tminus2_decomposed",
+            linewidth=2,
+            alpha=0.8,
+            marker="D",
+            markersize=3,
+            markevery=5,
+        )
+    if "pred_tminus2_baseline_cf" in pred.columns:
+        ax.plot(
+            pred["date"],
+            pred["pred_tminus2_baseline_cf"],
+            color="#7f7f7f",
+            linestyle=":",
+            label="pred_tminus2_baseline_cf",
+            linewidth=1.8,
+            alpha=0.75,
         )
     if "pred_recursive" in pred.columns:
         ax.plot(
@@ -117,7 +142,10 @@ def plot_full_year(pred):
     ax.axvspan(window_start, window_end, color="#d62728", alpha=0.08)
     ax.axvline(cny_2025, color="#d62728", linewidth=1.2, alpha=0.7)
 
-    ax.set_title("2025 Forecast - Optimized GBDT", fontsize=13, fontweight="bold")
+    title = "2025 Forecast - GBDT"
+    if has_decomposed:
+        title += " (Decomposed t-2)"
+    ax.set_title(title, fontsize=13, fontweight="bold")
     ax.set_xlabel("Date", fontsize=11)
     ax.set_ylabel("Flow", fontsize=11)
     ax.legend(fontsize=10, loc="upper right")
@@ -133,6 +161,8 @@ def plot_spring_window(pred):
     window_start = cny_2025 - pd.Timedelta(days=25)
     window_end = cny_2025 + pd.Timedelta(days=15)
     window = pred[(pred["date"] >= window_start) & (pred["date"] <= window_end)].copy()
+
+    has_decomposed = "pred_tminus2_decomposed" in window.columns
 
     fig, ax = plt.subplots(figsize=(15, 6))
     ax.plot(
@@ -155,6 +185,28 @@ def plot_spring_window(pred):
             alpha=0.8,
             marker="s",
             markersize=4,
+        )
+    if "pred_tminus2_decomposed" in window.columns:
+        ax.plot(
+            window["date"],
+            window["pred_tminus2_decomposed"],
+            color="#2ca02c",
+            linestyle="--",
+            label="pred_tminus2_decomposed",
+            linewidth=2,
+            alpha=0.8,
+            marker="D",
+            markersize=3,
+        )
+    if "pred_tminus2_baseline_cf" in window.columns:
+        ax.plot(
+            window["date"],
+            window["pred_tminus2_baseline_cf"],
+            color="#7f7f7f",
+            linestyle=":",
+            label="pred_tminus2_baseline_cf",
+            linewidth=1.8,
+            alpha=0.75,
         )
     if "pred_tminus2_calibrated" in window.columns:
         ax.plot(
@@ -199,7 +251,10 @@ def plot_spring_window(pred):
 
     ax.axvline(cny_2025, color="#d62728", linewidth=1.2, alpha=0.7)
 
-    ax.set_title("Spring Transport Window (CNY-25 to CNY+15)", fontsize=13, fontweight="bold")
+    title = "Spring Transport Window (CNY-25 to CNY+15)"
+    if has_decomposed:
+        title += " - Decomposed t-2"
+    ax.set_title(title, fontsize=13, fontweight="bold")
     ax.set_xlabel("Date", fontsize=11)
     ax.set_ylabel("Flow", fontsize=11)
     ax.legend(fontsize=10, loc="upper right")
@@ -298,14 +353,19 @@ def main():
 
     FIG_DIR.mkdir(parents=True, exist_ok=True)
     pred = load_predictions()
+    has_decomposed = "pred_tminus2_decomposed" in pred.columns
 
     fig_full = plot_full_year(pred)
-    full_path = FIG_DIR / "forecast_2025_optimized_full.png"
+    full_path = FIG_DIR / ("forecast_2025_decomposed_full.png" if has_decomposed else "forecast_2025_optimized_full.png")
     fig_full.savefig(full_path, dpi=160, bbox_inches="tight")
     plt.close(fig_full)
 
     fig_window = plot_spring_window(pred)
-    window_path = FIG_DIR / "forecast_2025_optimized_spring_window.png"
+    window_path = FIG_DIR / (
+        "forecast_2025_decomposed_spring_window.png"
+        if has_decomposed
+        else "forecast_2025_optimized_spring_window.png"
+    )
     fig_window.savefig(window_path, dpi=160, bbox_inches="tight")
     plt.close(fig_window)
 
