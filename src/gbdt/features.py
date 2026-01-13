@@ -7,6 +7,23 @@ import pandas as pd
 from src.holiday_feature import HolidayFeatureEngine
 
 
+def _linear_slope(values: np.ndarray) -> float:
+    values = np.asarray(values, dtype=float)
+    if values.size == 0 or np.any(np.isnan(values)):
+        return np.nan
+    n = int(values.size)
+    if n == 1:
+        return 0.0
+    x = np.arange(n, dtype=float)
+    x_mean = (n - 1) / 2.0
+    y_mean = float(values.mean())
+    denom = float(((x - x_mean) ** 2).sum())
+    if denom == 0.0:
+        return 0.0
+    num = float(((x - x_mean) * (values - y_mean)).sum())
+    return num / denom
+
+
 def add_cny_features(df, cny_dates, date_col="date"):
     dates = pd.to_datetime(df[date_col])
     cny_map = dates.dt.year.map(cny_dates)
@@ -50,9 +67,7 @@ def compute_group_stats(base, y, train_mask):
     month_mean, month_std = group_stat_map("month")
     holiday_mean, holiday_std = group_stat_map("holiday_type")
 
-    cny_train = pd.DataFrame(
-        {"days_to_cny": train["days_to_cny"], "y": y_train}
-    )
+    cny_train = pd.DataFrame({"days_to_cny": train["days_to_cny"], "y": y_train})
     cny_train = cny_train[cny_train["days_to_cny"].between(-25, 15)]
     cny_offset_mean = cny_train.groupby("days_to_cny")["y"].mean().to_dict()
 
@@ -92,19 +107,23 @@ def add_group_stats(base, y, train_mask):
 
 def build_dynamic_features(series, dynamic_cols):
     df = pd.DataFrame(index=series.index)
-    df["lag_1"] = series.shift(1)
+    shifted = series.shift(1)
+    df["lag_1"] = shifted
     df["lag_2"] = series.shift(2)
     df["lag_3"] = series.shift(3)
     df["lag_7"] = series.shift(7)
     df["lag_14"] = series.shift(14)
     df["lag_21"] = series.shift(21)
     df["lag_28"] = series.shift(28)
-    df["roll_7"] = series.shift(1).rolling(7).mean()
-    df["roll_14"] = series.shift(1).rolling(14).mean()
-    df["roll_30"] = series.shift(1).rolling(30).mean()
-    df["std_7"] = series.shift(1).rolling(7).std()
-    df["std_14"] = series.shift(1).rolling(14).std()
+    df["roll_7"] = shifted.rolling(7).mean()
+    df["roll_14"] = shifted.rolling(14).mean()
+    df["roll_30"] = shifted.rolling(30).mean()
+    df["std_7"] = shifted.rolling(7).std()
+    df["std_14"] = shifted.rolling(14).std()
     df["trend_7"] = df["roll_7"] - df["roll_7"].shift(7)
+    df["slope_7"] = shifted.rolling(7).apply(_linear_slope, raw=True)
+    df["slope_14"] = shifted.rolling(14).apply(_linear_slope, raw=True)
+    df["accel_7"] = df["slope_7"] - df["slope_7"].shift(7)
     df["recent_change_3d"] = (df["lag_1"] - series.shift(4)) / 3.0
     df["delta_vs_roll7"] = df["lag_1"] - df["roll_7"]
     df["delta_vs_lag7"] = df["lag_1"] - df["lag_7"]

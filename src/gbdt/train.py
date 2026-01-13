@@ -26,19 +26,36 @@ from src.gbdt.features import (
     make_sample_weight,
 )
 from src.gbdt.metrics import compute_metrics
+from src.gbdt.forecasting import predict_recursive_series, predict_tminus2_series
 from src.gbdt.model import build_model
-from src.gbdt.predict import recursive_predict
 from src.gbdt.persistence import save_group_stats
 
 
-def evaluate_model(model, base, y, test_mask):
+def evaluate_model(model, base, y, test_mask, delay=2):
     feature_cols = base.columns.tolist() + DYNAMIC_COLS
-    pred = recursive_predict(model, base, y, test_mask, feature_cols, DYNAMIC_COLS)
-    overall = compute_metrics(y.loc[test_mask], pred.loc[test_mask])
+    pred_rec = predict_recursive_series(model, base, y, feature_cols, DYNAMIC_COLS, test_mask)
+    overall_rec = compute_metrics(y.loc[test_mask], pred_rec.loc[test_mask])
 
     spring_mask = test_mask & base["days_to_cny"].between(-25, 15)
-    spring = compute_metrics(y.loc[spring_mask], pred.loc[spring_mask])
-    return pred, overall, spring
+    spring_rec = compute_metrics(y.loc[spring_mask], pred_rec.loc[spring_mask])
+
+    pred_tminus2 = predict_tminus2_series(
+        model,
+        base,
+        y,
+        feature_cols,
+        DYNAMIC_COLS,
+        test_mask,
+        delay=delay,
+    )
+    tminus2_valid = test_mask & pred_tminus2.notna()
+    overall_tminus2 = compute_metrics(y.loc[tminus2_valid], pred_tminus2.loc[tminus2_valid])
+    spring_tminus2_mask = spring_mask & pred_tminus2.notna()
+    spring_tminus2 = compute_metrics(
+        y.loc[spring_tminus2_mask], pred_tminus2.loc[spring_tminus2_mask]
+    )
+
+    return pred_rec, pred_tminus2, (overall_rec, spring_rec, overall_tminus2, spring_tminus2)
 
 
 def build_param_grid():
@@ -114,8 +131,12 @@ def select_best_model(raw, base):
                 verbose=False,
             )
 
-            _, overall, spring = evaluate_model(model, base_2023, y, val_mask_2024)
-            score = 0.7 * spring.mae + 0.3 * overall.mae
+            _, _, (overall_rec, spring_rec, overall_tminus2, spring_tminus2) = evaluate_model(
+                model, base_2023, y, val_mask_2024, delay=2
+            )
+            spring_mae = 0.5 * (spring_rec.mae + spring_tminus2.mae)
+            overall_mae = 0.5 * (overall_rec.mae + overall_tminus2.mae)
+            score = 0.7 * spring_mae + 0.3 * overall_mae
 
             if best_score is None or score < best_score:
                 best_score = score
@@ -162,22 +183,38 @@ def train_and_predict():
     MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
     final_model.save_model(MODEL_PATH)
 
-    pred_all, overall_2025, spring_2025 = evaluate_model(
-        final_model, base_final, y, test_mask_2025
+    pred_rec, pred_tminus2, (overall_2025, spring_2025, overall_tminus2, spring_tminus2) = (
+        evaluate_model(final_model, base_final, y, test_mask_2025, delay=2)
     )
 
     out = raw.loc[test_mask_2025, ["date", "y"]].copy()
-    out["pred_optimized"] = pred_all.loc[test_mask_2025].values
+    out["pred_recursive"] = pred_rec.loc[test_mask_2025].values
+    out["pred_tminus2"] = pred_tminus2.loc[test_mask_2025].values
     OUTPUT_PRED_PATH.parent.mkdir(parents=True, exist_ok=True)
     out.to_csv(OUTPUT_PRED_PATH, index=False)
 
     print("Saved:", OUTPUT_PRED_PATH)
     print("Saved:", MODEL_PATH)
     print("Saved:", STATS_PATH)
-    print("2025 Overall metrics:")
+    print("2025 pred_recursive metrics:")
     print(f"  MAE={overall_2025.mae:.2f} RMSE={overall_2025.rmse:.2f} MAPE={overall_2025.mape:.2f}%")
-    print("2025 Spring window metrics:")
+    print("2025 pred_recursive spring window metrics:")
     print(f"  MAE={spring_2025.mae:.2f} RMSE={spring_2025.rmse:.2f} MAPE={spring_2025.mape:.2f}%")
+    print("2025 pred_tminus2 metrics:")
+    print(
+        f"  MAE={overall_tminus2.mae:.2f} RMSE={overall_tminus2.rmse:.2f} MAPE={overall_tminus2.mape:.2f}%"
+    )
+    print("2025 pred_tminus2 spring window metrics:")
+    print(
+        f"  MAE={spring_tminus2.mae:.2f} RMSE={spring_tminus2.rmse:.2f} MAPE={spring_tminus2.mape:.2f}%"
+    )
+
+    try:
+        from src.gbdt.visualize import main as visualize_main
+
+        visualize_main()
+    except Exception as exc:
+        print("Warning: visualization failed:", repr(exc))
 
 
 def main():

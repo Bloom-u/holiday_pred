@@ -1,10 +1,27 @@
+import os
+
+import xgboost as xgb
 from xgboost import XGBRegressor
 
 
+def _resolve_device() -> str:
+    override = os.environ.get("XGB_DEVICE")
+    if override:
+        return override
+    try:
+        info = xgb.build_info()
+        if bool(info.get("USE_CUDA")):
+            return "cuda"
+    except Exception:
+        pass
+    return "cpu"
+
+
 def build_model(params):
+    device = _resolve_device()
     return XGBRegressor(
         tree_method="hist",
-        device="cuda",
+        device=device,
         objective="reg:absoluteerror",
         eval_metric="mae",
         max_depth=params["max_depth"],

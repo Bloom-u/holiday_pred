@@ -2,7 +2,47 @@ import numpy as np
 import pandas as pd
 
 
+def _linear_slope(values: np.ndarray) -> float:
+    values = np.asarray(values, dtype=float)
+    if values.size == 0 or np.any(np.isnan(values)):
+        return np.nan
+    n = int(values.size)
+    if n == 1:
+        return 0.0
+    x = np.arange(n, dtype=float)
+    x_mean = (n - 1) / 2.0
+    y_mean = float(values.mean())
+    denom = float(((x - x_mean) ** 2).sum())
+    if denom == 0.0:
+        return 0.0
+    num = float(((x - x_mean) * (values - y_mean)).sum())
+    return num / denom
+
+
 def dynamic_row(pred_series, idx):
+    if idx < 30:
+        return {k: np.nan for k in [
+            "lag_1",
+            "lag_2",
+            "lag_3",
+            "lag_7",
+            "lag_14",
+            "lag_21",
+            "lag_28",
+            "roll_7",
+            "roll_14",
+            "roll_30",
+            "std_7",
+            "std_14",
+            "trend_7",
+            "slope_7",
+            "slope_14",
+            "accel_7",
+            "recent_change_3d",
+            "delta_vs_roll7",
+            "delta_vs_lag7",
+        ]}
+
     lag_1 = pred_series.iloc[idx - 1]
     lag_2 = pred_series.iloc[idx - 2]
     lag_3 = pred_series.iloc[idx - 3]
@@ -18,6 +58,10 @@ def dynamic_row(pred_series, idx):
     std_7 = pred_series.iloc[idx - 7:idx].std()
     std_14 = pred_series.iloc[idx - 14:idx].std()
     trend_7 = roll_7 - pred_series.iloc[idx - 14:idx - 7].mean()
+    slope_7 = _linear_slope(pred_series.iloc[idx - 7:idx].to_numpy())
+    slope_14 = _linear_slope(pred_series.iloc[idx - 14:idx].to_numpy())
+    slope_7_prev = _linear_slope(pred_series.iloc[idx - 14:idx - 7].to_numpy())
+    accel_7 = slope_7 - slope_7_prev
     recent_change_3d = (lag_1 - lag_4) / 3.0
     delta_vs_roll7 = lag_1 - roll_7
     delta_vs_lag7 = lag_1 - lag_7
@@ -36,6 +80,9 @@ def dynamic_row(pred_series, idx):
         "std_7": std_7,
         "std_14": std_14,
         "trend_7": trend_7,
+        "slope_7": slope_7,
+        "slope_14": slope_14,
+        "accel_7": accel_7,
         "recent_change_3d": recent_change_3d,
         "delta_vs_roll7": delta_vs_roll7,
         "delta_vs_lag7": delta_vs_lag7,
