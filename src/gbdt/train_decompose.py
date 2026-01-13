@@ -9,7 +9,10 @@ from src.gbdt.config import (
     DATA_PATH,
     DYNAMIC_COLS,
     MODEL_PATH_TMINUS2_BASELINE,
+    MODEL_PATH_TMINUS2_BASELINE_CF,
     MODEL_PATH_TMINUS2_UPLIFT,
+    MODEL_PATH_TMINUS2_UPLIFT_CNY,
+    MODEL_PATH_TMINUS2_UPLIFT_HOLIDAY,
     OUTPUT_PRED_PATH,
     STATS_PATH,
     WEIGHT_GRID,
@@ -112,12 +115,14 @@ def train_and_predict_decomposed(delay=2):
     base = apply_group_stats(base, group_stats)
 
     X_full = build_feature_matrix(base, y, DYNAMIC_COLS, delay=delay)
-    feature_cols_full = base.columns.tolist() + DYNAMIC_COLS
     feature_cols_base = _baseline_cols(base) + DYNAMIC_COLS
     feature_cols_uplift = _uplift_cols(base)
 
     uplift_mask = _uplift_mask(base)
     uplift_train_mask = train_mask & uplift_mask
+    cny_mask = base["cny_window"] == 1 if "cny_window" in base.columns else pd.Series(False, index=base.index)
+    holiday_mask = (base["is_holiday"] == 1) if "is_holiday" in base.columns else pd.Series(False, index=base.index)
+    holiday_non_cny = holiday_mask & ~cny_mask
 
     base_train = X_full.loc[train_mask, feature_cols_base].dropna()
     uplift_train = X_full.loc[uplift_train_mask, feature_cols_uplift].dropna()
@@ -142,16 +147,36 @@ def train_and_predict_decomposed(delay=2):
     params = dict(BEST_PARAMS)
     params["eval_metric"] = "mae"
 
-    model_base = build_model(params)
-    model_base.fit(
+    model_base_normal = build_model(params)
+    model_base_normal.fit(
         base_train.astype(np.float32),
         y.loc[base_train.index].astype(float),
         sample_weight=weights_base,
         verbose=False,
     )
 
-    pred_base_all = predict_tminus2_series(
-        model_base,
+    base_cf_train = X_full.loc[train_mask & ~uplift_mask, feature_cols_base].dropna()
+    if base_cf_train.empty:
+        raise ValueError("Counterfactual baseline training set is empty; check uplift mask.")
+    model_base_cf = build_model(params)
+    model_base_cf.fit(
+        base_cf_train.astype(np.float32),
+        y.loc[base_cf_train.index].astype(float),
+        sample_weight=weights_all.loc[base_cf_train.index],
+        verbose=False,
+    )
+
+    pred_base_normal_all = predict_tminus2_series(
+        model_base_normal,
+        base,
+        y,
+        feature_cols_base,
+        DYNAMIC_COLS,
+        train_mask | test_mask,
+        delay=delay,
+    )
+    pred_base_cf_all = predict_tminus2_series(
+        model_base_cf,
         base,
         y,
         feature_cols_base,
@@ -160,44 +185,114 @@ def train_and_predict_decomposed(delay=2):
         delay=delay,
     )
 
-    residual = (y - pred_base_all).loc[uplift_train.index].astype(float)
-    residual = residual.dropna()
-    uplift_train = uplift_train.loc[residual.index]
-    weights_uplift = weights_uplift.loc[residual.index]
+    base = base.copy()
+    base["tminus2_base_pred_normal"] = pred_base_normal_all.astype(float)
+    base["tminus2_base_pred_cf"] = pred_base_cf_all.astype(float)
+    X_full_with_base = build_feature_matrix(base, y, DYNAMIC_COLS, delay=delay)
+    feature_cols_uplift = (
+        _uplift_cols(base) + ["tminus2_base_pred_normal", "tminus2_base_pred_cf"] + DYNAMIC_COLS
+    )
+
+    residual_all = (y - pred_base_cf_all).astype(float)
+    uplift_target = residual_all.loc[uplift_train_mask]
+    uplift_target = uplift_target.dropna()
+    uplift_train = X_full_with_base.loc[uplift_target.index, feature_cols_uplift].dropna()
+    uplift_target = uplift_target.loc[uplift_train.index]
+    weights_uplift = weights_all.loc[uplift_train.index]
+
+    cny_train_idx = uplift_train.index.intersection(base.index[cny_mask & train_mask])
+    holiday_train_idx = uplift_train.index.intersection(base.index[holiday_non_cny & train_mask])
+    if cny_train_idx.empty or holiday_train_idx.empty:
+        raise ValueError("Uplift training split empty; check masks for CNY/holiday.")
 
     uplift_params = dict(params)
     uplift_params["objective"] = "reg:squarederror"
     model_uplift = build_model(uplift_params)
     model_uplift.fit(
         uplift_train.astype(np.float32),
-        residual,
+        uplift_target,
         sample_weight=weights_uplift,
         verbose=False,
     )
 
-    pred_base = pred_base_all.copy()
-    pred_uplift = predict_tminus2_series(
-        model_uplift,
+    model_uplift_cny = build_model(uplift_params)
+    model_uplift_cny.fit(
+        uplift_train.loc[cny_train_idx].astype(np.float32),
+        uplift_target.loc[cny_train_idx],
+        sample_weight=weights_uplift.loc[cny_train_idx] * 2.0,
+        verbose=False,
+    )
+
+    model_uplift_holiday = build_model(uplift_params)
+    model_uplift_holiday.fit(
+        uplift_train.loc[holiday_train_idx].astype(np.float32),
+        uplift_target.loc[holiday_train_idx],
+        sample_weight=weights_uplift.loc[holiday_train_idx],
+        verbose=False,
+    )
+
+    pred_base = pred_base_normal_all.copy()
+    pred_base_cf = pred_base_cf_all.copy()
+    pred_uplift_cny = predict_tminus2_series(
+        model_uplift_cny,
         base,
         y,
         feature_cols_uplift,
         DYNAMIC_COLS,
-        test_mask,
+        test_mask & cny_mask,
+        delay=delay,
+    )
+    pred_uplift_holiday = predict_tminus2_series(
+        model_uplift_holiday,
+        base,
+        y,
+        feature_cols_uplift,
+        DYNAMIC_COLS,
+        test_mask & holiday_non_cny,
         delay=delay,
     )
 
     pred_total = pred_base.copy()
-    pred_total.loc[test_mask] = pred_base.loc[test_mask] + pred_uplift.loc[test_mask].fillna(0.0) * uplift_mask.loc[
-        test_mask
-    ].astype(float)
+    pred_total.loc[test_mask] = pred_base.loc[test_mask]
+    pred_total.loc[test_mask & uplift_mask] = pred_base_cf.loc[test_mask & uplift_mask]
+
+    # In the CNY window, baseline_cf can be too low (distribution shift). Blend in a fraction of
+    # the normal baseline (which is closer to the current level) for days away from CNY day.
+    if "days_to_cny" in base.columns:
+        diff = (pred_base - pred_base_cf).astype(float)
+        pre = test_mask & cny_mask & (base["days_to_cny"] <= -2)
+        post = test_mask & cny_mask & (base["days_to_cny"] >= 1)
+        pred_total.loc[pre] = pred_total.loc[pre] + 0.50 * diff.loc[pre]
+        pred_total.loc[post] = pred_total.loc[post] + 0.35 * diff.loc[post]
+    pred_total.loc[test_mask & cny_mask] = pred_total.loc[test_mask & cny_mask] + pred_uplift_cny.loc[
+        test_mask & cny_mask
+    ].fillna(0.0)
+    pred_total.loc[test_mask & holiday_non_cny] = pred_total.loc[test_mask & holiday_non_cny] + pred_uplift_holiday.loc[
+        test_mask & holiday_non_cny
+    ].fillna(0.0)
+    # Core CNY days are extremely sparse in training (often 1 sample per offset),
+    # so shrink predictions toward the historical CNY offset mean to reduce overshoot.
+    if "days_to_cny" in base.columns and "cny_offset_mean" in base.columns:
+        core = test_mask & cny_mask & base["days_to_cny"].between(-1, 0)
+        shrink = 0.30  # keep most of the learned signal, but cap extreme deviations near day 0
+        pred_total.loc[core] = (
+            shrink * pred_total.loc[core].astype(float)
+            + (1.0 - shrink) * base.loc[core, "cny_offset_mean"].astype(float)
+        )
 
     MODEL_PATH_TMINUS2_BASELINE.parent.mkdir(parents=True, exist_ok=True)
-    model_base.save_model(MODEL_PATH_TMINUS2_BASELINE)
+    model_base_normal.save_model(MODEL_PATH_TMINUS2_BASELINE)
+    model_base_cf.save_model(MODEL_PATH_TMINUS2_BASELINE_CF)
     model_uplift.save_model(MODEL_PATH_TMINUS2_UPLIFT)
+    model_uplift_cny.save_model(MODEL_PATH_TMINUS2_UPLIFT_CNY)
+    model_uplift_holiday.save_model(MODEL_PATH_TMINUS2_UPLIFT_HOLIDAY)
 
     out = raw.loc[test_mask, ["date", "y"]].copy()
     out["pred_tminus2_baseline"] = pred_base.loc[test_mask].values
-    out["pred_tminus2_uplift"] = pred_uplift.loc[test_mask].values
+    out["pred_tminus2_baseline_cf"] = pred_base_cf.loc[test_mask].values
+    out["pred_tminus2_uplift"] = (pred_uplift_cny.fillna(0.0) + pred_uplift_holiday.fillna(0.0)).loc[test_mask].values
+    out["pred_tminus2_uplift_cny"] = pred_uplift_cny.loc[test_mask].values
+    out["pred_tminus2_uplift_holiday"] = pred_uplift_holiday.loc[test_mask].values
     out["pred_tminus2_decomposed"] = pred_total.loc[test_mask].values
     OUTPUT_PRED_PATH.parent.mkdir(parents=True, exist_ok=True)
     out.to_csv(OUTPUT_PRED_PATH, index=False)
@@ -211,7 +306,10 @@ def train_and_predict_decomposed(delay=2):
     spring = compute_metrics(window["y"], window["pred_tminus2_decomposed"])
     print("Saved:", OUTPUT_PRED_PATH)
     print("Saved:", MODEL_PATH_TMINUS2_BASELINE)
+    print("Saved:", MODEL_PATH_TMINUS2_BASELINE_CF)
     print("Saved:", MODEL_PATH_TMINUS2_UPLIFT)
+    print("Saved:", MODEL_PATH_TMINUS2_UPLIFT_CNY)
+    print("Saved:", MODEL_PATH_TMINUS2_UPLIFT_HOLIDAY)
     print("Saved:", STATS_PATH)
     print("2025 pred_tminus2_decomposed metrics:")
     print(f"  MAE={overall.mae:.2f} RMSE={overall.rmse:.2f} MAPE={overall.mape:.2f}%")
