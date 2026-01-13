@@ -22,8 +22,8 @@ def build_model(params):
     return XGBRegressor(
         tree_method="hist",
         device=device,
-        objective="reg:absoluteerror",
-        eval_metric="mae",
+        objective=params.get("objective", "reg:absoluteerror"),
+        eval_metric=params.get("eval_metric", "mae"),
         max_depth=params["max_depth"],
         n_estimators=params["n_estimators"],
         learning_rate=params["learning_rate"],
