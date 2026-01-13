@@ -7,7 +7,10 @@ OUTPUT_PRED_PATH = Path("data/pred_2025_optimized.csv")
 FIG_DIR = Path("figs")
 MODEL_DIR = Path("models/gbdt")
 MODEL_PATH = MODEL_DIR / "best_model.json"
+MODEL_PATH_RECURSIVE = MODEL_DIR / "best_model_recursive.json"
+MODEL_PATH_TMINUS2 = MODEL_DIR / "best_model_tminus2.json"
 STATS_PATH = MODEL_DIR / "group_stats.json"
+CALIB_PATH = MODEL_DIR / "calibration.json"
 FORECAST_YEAR = 2025
 
 CNY_DATES = {

@@ -12,6 +12,8 @@ from src.gbdt.config import (
     DYNAMIC_COLS,
     FIG_DIR,
     MODEL_PATH,
+    MODEL_PATH_RECURSIVE,
+    MODEL_PATH_TMINUS2,
     OUTPUT_PRED_PATH,
     STATS_PATH,
 )
@@ -66,6 +68,19 @@ def plot_full_year(pred):
             alpha=0.8,
             marker="s",
             markersize=4,
+            markevery=5,
+        )
+    if "pred_tminus2_calibrated" in pred.columns:
+        ax.plot(
+            pred["date"],
+            pred["pred_tminus2_calibrated"],
+            color="#2ca02c",
+            linestyle="--",
+            label="pred_tminus2_cal",
+            linewidth=2,
+            alpha=0.75,
+            marker="D",
+            markersize=3,
             markevery=5,
         )
     if "pred_recursive" in pred.columns:
@@ -141,6 +156,18 @@ def plot_spring_window(pred):
             marker="s",
             markersize=4,
         )
+    if "pred_tminus2_calibrated" in window.columns:
+        ax.plot(
+            window["date"],
+            window["pred_tminus2_calibrated"],
+            color="#2ca02c",
+            linestyle="--",
+            label="pred_tminus2_cal",
+            linewidth=2,
+            alpha=0.75,
+            marker="D",
+            markersize=3,
+        )
     if "pred_recursive" in window.columns:
         ax.plot(
             window["date"],
@@ -189,7 +216,15 @@ def load_model(path):
     return model
 
 
-def plot_multi_year_spring_windows(model, base, y, dates, years=(2023, 2024, 2025), delay=2):
+def plot_multi_year_spring_windows(
+    model_recursive,
+    model_tminus2,
+    base,
+    y,
+    dates,
+    years=(2023, 2024, 2025),
+    delay=2,
+):
     feature_cols = base.columns.tolist() + DYNAMIC_COLS
     fig, axes = plt.subplots(len(years), 1, figsize=(15, 9), sharex=False)
     if len(years) == 1:
@@ -199,9 +234,11 @@ def plot_multi_year_spring_windows(model, base, y, dates, years=(2023, 2024, 202
 
     for ax, year in zip(axes, years):
         mask = dates.dt.year == year
-        pred_rec = predict_recursive_series(model, base, y, feature_cols, DYNAMIC_COLS, mask)
+        pred_rec = predict_recursive_series(
+            model_recursive, base, y, feature_cols, DYNAMIC_COLS, mask
+        )
         pred_tminus2 = predict_tminus2_series(
-            model, base, y, feature_cols, DYNAMIC_COLS, mask, delay=delay
+            model_tminus2, base, y, feature_cols, DYNAMIC_COLS, mask, delay=delay
         )
 
         df = pd.DataFrame(
@@ -278,11 +315,18 @@ def main():
         base = build_base_features(raw, CNY_DATES)
         stats = load_group_stats(STATS_PATH)
         base = apply_group_stats(base, stats)
-        model = load_model(MODEL_PATH)
+        model_recursive = load_model(MODEL_PATH_RECURSIVE) if MODEL_PATH_RECURSIVE.exists() else load_model(MODEL_PATH)
+        model_tminus2 = load_model(MODEL_PATH_TMINUS2) if MODEL_PATH_TMINUS2.exists() else model_recursive
         y = raw["y"]
 
         fig_multi = plot_multi_year_spring_windows(
-            model, base, y, raw["date"], years=(2023, 2024, 2025), delay=2
+            model_recursive,
+            model_tminus2,
+            base,
+            y,
+            raw["date"],
+            years=(2023, 2024, 2025),
+            delay=2,
         )
         fig_multi.savefig(multi_path, dpi=160, bbox_inches="tight")
         plt.close(fig_multi)

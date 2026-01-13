@@ -105,16 +105,20 @@ def add_group_stats(base, y, train_mask):
     return apply_group_stats(base, stats)
 
 
-def build_dynamic_features(series, dynamic_cols):
+def build_dynamic_features(series, dynamic_cols, delay=1):
     df = pd.DataFrame(index=series.index)
-    shifted = series.shift(1)
+    delay = int(delay)
+    if delay < 1:
+        raise ValueError(f"delay must be >= 1, got {delay}")
+
+    shifted = series.shift(delay)
     df["lag_1"] = shifted
-    df["lag_2"] = series.shift(2)
-    df["lag_3"] = series.shift(3)
-    df["lag_7"] = series.shift(7)
-    df["lag_14"] = series.shift(14)
-    df["lag_21"] = series.shift(21)
-    df["lag_28"] = series.shift(28)
+    df["lag_2"] = series.shift(delay + 1)
+    df["lag_3"] = series.shift(delay + 2)
+    df["lag_7"] = series.shift(delay + 6)
+    df["lag_14"] = series.shift(delay + 13)
+    df["lag_21"] = series.shift(delay + 20)
+    df["lag_28"] = series.shift(delay + 27)
     df["roll_7"] = shifted.rolling(7).mean()
     df["roll_14"] = shifted.rolling(14).mean()
     df["roll_30"] = shifted.rolling(30).mean()
@@ -124,14 +128,14 @@ def build_dynamic_features(series, dynamic_cols):
     df["slope_7"] = shifted.rolling(7).apply(_linear_slope, raw=True)
     df["slope_14"] = shifted.rolling(14).apply(_linear_slope, raw=True)
     df["accel_7"] = df["slope_7"] - df["slope_7"].shift(7)
-    df["recent_change_3d"] = (df["lag_1"] - series.shift(4)) / 3.0
+    df["recent_change_3d"] = (df["lag_1"] - series.shift(delay + 3)) / 3.0
     df["delta_vs_roll7"] = df["lag_1"] - df["roll_7"]
     df["delta_vs_lag7"] = df["lag_1"] - df["lag_7"]
     return df[dynamic_cols]
 
 
-def build_feature_matrix(base, series, dynamic_cols):
-    dynamic = build_dynamic_features(series, dynamic_cols)
+def build_feature_matrix(base, series, dynamic_cols, delay=1):
+    dynamic = build_dynamic_features(series, dynamic_cols, delay=delay)
     return pd.concat([base, dynamic], axis=1)
 
 

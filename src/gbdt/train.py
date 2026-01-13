@@ -5,12 +5,16 @@ from itertools import product
 import numpy as np
 import pandas as pd
 
+from src.gbdt.calibration import apply_tminus2_offsets, fit_tminus2_offsets
 from src.gbdt.config import (
     BEST_PARAMS,
+    CALIB_PATH,
     CNY_DATES,
     DATA_PATH,
     DYNAMIC_COLS,
     MODEL_PATH,
+    MODEL_PATH_RECURSIVE,
+    MODEL_PATH_TMINUS2,
     OUTPUT_PRED_PATH,
     RANDOM_SEARCH_ITERS,
     STATS_PATH,
@@ -28,19 +32,21 @@ from src.gbdt.features import (
 from src.gbdt.metrics import compute_metrics
 from src.gbdt.forecasting import predict_recursive_series, predict_tminus2_series
 from src.gbdt.model import build_model
-from src.gbdt.persistence import save_group_stats
+from src.gbdt.persistence import save_calibration, save_group_stats
 
 
-def evaluate_model(model, base, y, test_mask, delay=2):
+def evaluate_models(model_recursive, model_tminus2, base, y, test_mask, delay=2):
     feature_cols = base.columns.tolist() + DYNAMIC_COLS
-    pred_rec = predict_recursive_series(model, base, y, feature_cols, DYNAMIC_COLS, test_mask)
+    pred_rec = predict_recursive_series(
+        model_recursive, base, y, feature_cols, DYNAMIC_COLS, test_mask
+    )
     overall_rec = compute_metrics(y.loc[test_mask], pred_rec.loc[test_mask])
 
     spring_mask = test_mask & base["days_to_cny"].between(-25, 15)
     spring_rec = compute_metrics(y.loc[spring_mask], pred_rec.loc[spring_mask])
 
     pred_tminus2 = predict_tminus2_series(
-        model,
+        model_tminus2,
         base,
         y,
         feature_cols,
@@ -81,10 +87,15 @@ def select_best_model(raw, base):
     val_mask_2024 = raw["date"].dt.year == 2024
 
     base_2023 = add_group_stats(base, y, train_mask_2023)
-    X_full_2023 = build_feature_matrix(base_2023, y, DYNAMIC_COLS)
-    train_2023 = X_full_2023.loc[train_mask_2023].dropna()
-    X_train_2023 = train_2023.astype(np.float32)
-    y_train_2023 = y.loc[train_2023.index].astype(float)
+    X_full_2023_rec = build_feature_matrix(base_2023, y, DYNAMIC_COLS, delay=1)
+    train_2023_rec = X_full_2023_rec.loc[train_mask_2023].dropna()
+    X_train_2023_rec = train_2023_rec.astype(np.float32)
+    y_train_2023_rec = y.loc[train_2023_rec.index].astype(float)
+
+    X_full_2023_tminus2 = build_feature_matrix(base_2023, y, DYNAMIC_COLS, delay=2)
+    train_2023_tminus2 = X_full_2023_tminus2.loc[train_mask_2023].dropna()
+    X_train_2023_tminus2 = train_2023_tminus2.astype(np.float32)
+    y_train_2023_tminus2 = y.loc[train_2023_tminus2.index].astype(float)
 
     param_grid = build_param_grid()
     random.seed(42)
@@ -121,18 +132,27 @@ def select_best_model(raw, base):
         }
         for w_window, w_core in WEIGHT_GRID:
             weights = make_sample_weight(base_2023, w_window, w_core)
-            weights = pd.Series(weights, index=base_2023.index).loc[train_2023.index]
+            weights = pd.Series(weights, index=base_2023.index)
+            weights_rec = weights.loc[train_2023_rec.index]
+            weights_tminus2 = weights.loc[train_2023_tminus2.index]
 
-            model = build_model(params)
-            model.fit(
-                X_train_2023,
-                y_train_2023,
-                sample_weight=weights,
+            model_recursive = build_model(params)
+            model_recursive.fit(
+                X_train_2023_rec,
+                y_train_2023_rec,
+                sample_weight=weights_rec,
+                verbose=False,
+            )
+            model_tminus2 = build_model(params)
+            model_tminus2.fit(
+                X_train_2023_tminus2,
+                y_train_2023_tminus2,
+                sample_weight=weights_tminus2,
                 verbose=False,
             )
 
-            _, _, (overall_rec, spring_rec, overall_tminus2, spring_tminus2) = evaluate_model(
-                model, base_2023, y, val_mask_2024, delay=2
+            _, _, (overall_rec, spring_rec, overall_tminus2, spring_tminus2) = evaluate_models(
+                model_recursive, model_tminus2, base_2023, y, val_mask_2024, delay=2
             )
             spring_mae = 0.5 * (spring_rec.mae + spring_tminus2.mae)
             overall_mae = 0.5 * (overall_rec.mae + overall_tminus2.mae)
@@ -144,6 +164,33 @@ def select_best_model(raw, base):
                 best_weights = (w_window, w_core)
 
     return best_params, best_weights, best_score
+
+
+def fit_tminus2_calibration(raw, base, params, weight_pair, delay=2):
+    y = raw["y"].astype(float)
+    train_mask = raw["date"].dt.year == 2023
+    val_mask = raw["date"].dt.year == 2024
+
+    base_train = add_group_stats(base, y, train_mask)
+    X_full = build_feature_matrix(base_train, y, DYNAMIC_COLS, delay=delay)
+    train = X_full.loc[train_mask].dropna()
+    X_train = train.astype(np.float32)
+    y_train = y.loc[train.index].astype(float)
+
+    w_window, w_core = weight_pair
+    weights = make_sample_weight(base_train, w_window, w_core)
+    weights = pd.Series(weights, index=base_train.index).loc[train.index]
+
+    model = build_model(params)
+    model.fit(X_train, y_train, sample_weight=weights, verbose=False)
+
+    feature_cols = base_train.columns.tolist() + DYNAMIC_COLS
+    pred_val = predict_tminus2_series(
+        model, base_train, y, feature_cols, DYNAMIC_COLS, val_mask, delay=delay
+    )
+    offsets = fit_tminus2_offsets(base_train.loc[val_mask], y.loc[val_mask], pred_val.loc[val_mask])
+    offsets["delay"] = float(delay)
+    return offsets
 
 
 def train_and_predict():
@@ -158,44 +205,79 @@ def train_and_predict():
     print("Best params on 2024 validation:")
     print(f"  params={best_params} weights={best_weights} score={best_score:.2f}")
 
+    calibration = fit_tminus2_calibration(raw, base, best_params, best_weights, delay=2)
+    save_calibration(CALIB_PATH, calibration)
+
     train_mask_final = raw["date"].dt.year.isin([2023, 2024])
     test_mask_2025 = raw["date"].dt.year == 2025
 
     group_stats = compute_group_stats(base, y, train_mask_final)
     save_group_stats(STATS_PATH, group_stats)
     base_final = apply_group_stats(base, group_stats)
-    X_full_final = build_feature_matrix(base_final, y, DYNAMIC_COLS)
-    train_final = X_full_final.loc[train_mask_final].dropna()
-    X_train_final = train_final.astype(np.float32)
-    y_train_final = y.loc[train_final.index].astype(float)
+    X_full_final_rec = build_feature_matrix(base_final, y, DYNAMIC_COLS, delay=1)
+    train_final_rec = X_full_final_rec.loc[train_mask_final].dropna()
+    X_train_final_rec = train_final_rec.astype(np.float32)
+    y_train_final_rec = y.loc[train_final_rec.index].astype(float)
+
+    X_full_final_tminus2 = build_feature_matrix(base_final, y, DYNAMIC_COLS, delay=2)
+    train_final_tminus2 = X_full_final_tminus2.loc[train_mask_final].dropna()
+    X_train_final_tminus2 = train_final_tminus2.astype(np.float32)
+    y_train_final_tminus2 = y.loc[train_final_tminus2.index].astype(float)
 
     w_window, w_core = best_weights
     weights_final = make_sample_weight(base_final, w_window, w_core)
-    weights_final = pd.Series(weights_final, index=base_final.index).loc[train_final.index]
+    weights_final = pd.Series(weights_final, index=base_final.index)
+    weights_final_rec = weights_final.loc[train_final_rec.index]
+    weights_final_tminus2 = weights_final.loc[train_final_tminus2.index]
 
-    final_model = build_model(best_params)
-    final_model.fit(
-        X_train_final,
-        y_train_final,
-        sample_weight=weights_final,
+    final_model_recursive = build_model(best_params)
+    final_model_recursive.fit(
+        X_train_final_rec,
+        y_train_final_rec,
+        sample_weight=weights_final_rec,
+        verbose=False,
+    )
+
+    final_model_tminus2 = build_model(best_params)
+    final_model_tminus2.fit(
+        X_train_final_tminus2,
+        y_train_final_tminus2,
+        sample_weight=weights_final_tminus2,
         verbose=False,
     )
     MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
-    final_model.save_model(MODEL_PATH)
+    final_model_recursive.save_model(MODEL_PATH_RECURSIVE)
+    final_model_recursive.save_model(MODEL_PATH)
+    final_model_tminus2.save_model(MODEL_PATH_TMINUS2)
 
     pred_rec, pred_tminus2, (overall_2025, spring_2025, overall_tminus2, spring_tminus2) = (
-        evaluate_model(final_model, base_final, y, test_mask_2025, delay=2)
+        evaluate_models(final_model_recursive, final_model_tminus2, base_final, y, test_mask_2025, delay=2)
+    )
+    pred_tminus2_cal = pred_tminus2.copy()
+    pred_tminus2_cal.loc[test_mask_2025] = apply_tminus2_offsets(
+        base_final.loc[test_mask_2025], pred_tminus2.loc[test_mask_2025], calibration
+    )
+    tminus2_valid_cal = test_mask_2025 & pred_tminus2_cal.notna()
+    overall_tminus2_cal = compute_metrics(y.loc[tminus2_valid_cal], pred_tminus2_cal.loc[tminus2_valid_cal])
+    spring_mask = test_mask_2025 & base_final["days_to_cny"].between(-25, 15)
+    spring_tminus2_cal_mask = spring_mask & pred_tminus2_cal.notna()
+    spring_tminus2_cal = compute_metrics(
+        y.loc[spring_tminus2_cal_mask], pred_tminus2_cal.loc[spring_tminus2_cal_mask]
     )
 
     out = raw.loc[test_mask_2025, ["date", "y"]].copy()
     out["pred_recursive"] = pred_rec.loc[test_mask_2025].values
     out["pred_tminus2"] = pred_tminus2.loc[test_mask_2025].values
+    out["pred_tminus2_calibrated"] = pred_tminus2_cal.loc[test_mask_2025].values
     OUTPUT_PRED_PATH.parent.mkdir(parents=True, exist_ok=True)
     out.to_csv(OUTPUT_PRED_PATH, index=False)
 
     print("Saved:", OUTPUT_PRED_PATH)
+    print("Saved:", MODEL_PATH_RECURSIVE)
+    print("Saved:", MODEL_PATH_TMINUS2)
     print("Saved:", MODEL_PATH)
     print("Saved:", STATS_PATH)
+    print("Saved:", CALIB_PATH)
     print("2025 pred_recursive metrics:")
     print(f"  MAE={overall_2025.mae:.2f} RMSE={overall_2025.rmse:.2f} MAPE={overall_2025.mape:.2f}%")
     print("2025 pred_recursive spring window metrics:")
@@ -207,6 +289,14 @@ def train_and_predict():
     print("2025 pred_tminus2 spring window metrics:")
     print(
         f"  MAE={spring_tminus2.mae:.2f} RMSE={spring_tminus2.rmse:.2f} MAPE={spring_tminus2.mape:.2f}%"
+    )
+    print("2025 pred_tminus2_calibrated metrics:")
+    print(
+        f"  MAE={overall_tminus2_cal.mae:.2f} RMSE={overall_tminus2_cal.rmse:.2f} MAPE={overall_tminus2_cal.mape:.2f}%"
+    )
+    print("2025 pred_tminus2_calibrated spring window metrics:")
+    print(
+        f"  MAE={spring_tminus2_cal.mae:.2f} RMSE={spring_tminus2_cal.rmse:.2f} MAPE={spring_tminus2_cal.mape:.2f}%"
     )
 
     try:
