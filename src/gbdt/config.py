@@ -57,3 +57,8 @@ BEST_PARAMS = {
 }
 
 WEIGHT_GRID = [(1.0, 2.0), (2.0, 4.0)]
+
+# XGBoost objectives (experiment-friendly; keep defaults backward-compatible)
+OBJECTIVE_RECURSIVE = "reg:absoluteerror"
+OBJECTIVE_TMINUS2 = "reg:squarederror"
+EVAL_METRIC = "mae"

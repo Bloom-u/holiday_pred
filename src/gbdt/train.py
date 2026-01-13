@@ -12,9 +12,12 @@ from src.gbdt.config import (
     CNY_DATES,
     DATA_PATH,
     DYNAMIC_COLS,
+    EVAL_METRIC,
     MODEL_PATH,
     MODEL_PATH_RECURSIVE,
     MODEL_PATH_TMINUS2,
+    OBJECTIVE_RECURSIVE,
+    OBJECTIVE_TMINUS2,
     OUTPUT_PRED_PATH,
     RANDOM_SEARCH_ITERS,
     STATS_PATH,
@@ -136,14 +139,20 @@ def select_best_model(raw, base):
             weights_rec = weights.loc[train_2023_rec.index]
             weights_tminus2 = weights.loc[train_2023_tminus2.index]
 
-            model_recursive = build_model(params)
+            params_recursive = dict(params)
+            params_recursive["objective"] = OBJECTIVE_RECURSIVE
+            params_recursive["eval_metric"] = EVAL_METRIC
+            model_recursive = build_model(params_recursive)
             model_recursive.fit(
                 X_train_2023_rec,
                 y_train_2023_rec,
                 sample_weight=weights_rec,
                 verbose=False,
             )
-            model_tminus2 = build_model(params)
+            params_tminus2 = dict(params)
+            params_tminus2["objective"] = OBJECTIVE_TMINUS2
+            params_tminus2["eval_metric"] = EVAL_METRIC
+            model_tminus2 = build_model(params_tminus2)
             model_tminus2.fit(
                 X_train_2023_tminus2,
                 y_train_2023_tminus2,
@@ -181,6 +190,9 @@ def fit_tminus2_calibration(raw, base, params, weight_pair, delay=2):
     weights = make_sample_weight(base_train, w_window, w_core)
     weights = pd.Series(weights, index=base_train.index).loc[train.index]
 
+    params = dict(params)
+    params["objective"] = OBJECTIVE_TMINUS2
+    params["eval_metric"] = EVAL_METRIC
     model = build_model(params)
     model.fit(X_train, y_train, sample_weight=weights, verbose=False)
 
@@ -230,7 +242,10 @@ def train_and_predict():
     weights_final_rec = weights_final.loc[train_final_rec.index]
     weights_final_tminus2 = weights_final.loc[train_final_tminus2.index]
 
-    final_model_recursive = build_model(best_params)
+    best_params_recursive = dict(best_params)
+    best_params_recursive["objective"] = OBJECTIVE_RECURSIVE
+    best_params_recursive["eval_metric"] = EVAL_METRIC
+    final_model_recursive = build_model(best_params_recursive)
     final_model_recursive.fit(
         X_train_final_rec,
         y_train_final_rec,
@@ -238,7 +253,10 @@ def train_and_predict():
         verbose=False,
     )
 
-    final_model_tminus2 = build_model(best_params)
+    best_params_tminus2 = dict(best_params)
+    best_params_tminus2["objective"] = OBJECTIVE_TMINUS2
+    best_params_tminus2["eval_metric"] = EVAL_METRIC
+    final_model_tminus2 = build_model(best_params_tminus2)
     final_model_tminus2.fit(
         X_train_final_tminus2,
         y_train_final_tminus2,
