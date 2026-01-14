@@ -35,13 +35,15 @@ env/
 
 # Data (large files - keep locally, don't push)
 data/
-docs/
 *.pkl
 *.pth
 *.csv
 *.xlsx
 models/**/*.pth
 models/**/*.pkl
+models/**/*.json
+figs/*.png
+figs/**/*.png
 
 # Jupyter
 .ipynb_checkpoints/

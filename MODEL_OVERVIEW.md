@@ -1,7 +1,6 @@
-# 模型介绍：节假日交通流量预测（GBDT / XGBoost）
+# 模型介绍：分解式 t-2 交通流量预测（GBDT / XGBoost）
 
-本文档解释本仓库的交通流量预测模型“是什么、为什么这样设计、各模块怎么协作、输出怎么解释、边界条件与风险点是什么”。  
-训练/运行指令请见 `GBDT_TRAINING_GUIDE.md`。
+本文档解释本仓库当前主推的“分解建模（baseline + uplift）”方案：是什么、为什么这样设计、各模块怎么协作、输出怎么解释、边界条件与风险点是什么。训练/运行指令见 `GBDT_TRAINING_GUIDE.md`。
 
 ---
 
@@ -15,13 +14,13 @@
 
 ---
 
-## 2. 模型整体结构（标准管线）
+## 2. 模型整体结构（分解式 t-2）
 
-标准管线入口：`src/gbdt/train.py`（并配套 `src/gbdt/infer.py` 推理）。
+入口：`src/gbdt/train_decompose.py`。
 
-核心是一个 **XGBoost 回归模型**（`src/gbdt/model.py`）叠加两类工程增强：
-1) **特征工程**（日期/节假日/春节窗口 + 动态滞后与滚动统计 + 训练期统计映射）
-2) **后处理纠偏（calibration）**：用于修正 t-2 的系统性偏差（可选）
+核心是一个 **XGBoost 回归模型族**（`src/gbdt/model.py`）叠加两类结构化设计：
+1) **特征工程**：日期/节假日/春节窗口（静态） + 动态滞后/滚动/趋势（t-2 延迟约束） + 训练期统计映射（group stats）
+2) **分解建模**：用 baseline 解释“常态水平”，用 uplift 解释“节假日/春运增量”，再组合得到最终预测
 
 ### 2.1 特征工程模块
 
@@ -68,36 +67,9 @@
 
 ---
 
-## 4. t-2 纠偏（calibration）是什么、解决什么问题
+## 4. 分解建模在做什么：baseline + uplift
 
-入口：`src/gbdt/calibration.py`
-
-纠偏的目标不是改变预测的“形状/波动”，而是修正 **可重复出现的系统性偏差（bias）**：
-- 在验证集（例如 2024）上计算 `offset = mean(y_true - y_pred)`（按日类型分组）
-- 推理时对预测加回 offset，得到 `pred_tminus2_calibrated`
-
-这种方法在工业界常称为 bias correction / calibration / MOS（Model Output Statistics），尤其在存在分布漂移或峰值稀疏时非常实用。
-
-风险与注意：
-- offsets 必须在验证集上学（例如 2024），**不能用 2025 真实值调**，否则就是测试集调参。
-
----
-
-## 5. 损失函数实验（`exp-loss`）的设计意图
-
-分支 `exp-loss` 的核心想法：
-- recursive 仍用 MAE（更稳）
-- t-2 用 MSE（`reg:squarederror`）以更强地惩罚峰值误差，倾向减轻低估
-
-本质上是“对峰值更敏感”的训练目标选择，通常会带来：
-- 峰值日误差下降（但可能导致常态日波动更大）
-- 与 calibration 结合时，整体 MAE/MAPE 更容易改善
-
----
-
-## 6. 分解建模（`exp-decompose`）在做什么：baseline + uplift
-
-分支 `exp-decompose`（入口 `src/gbdt/train_decompose.py`）引入了一个常见的结构化建模思路：
+`train_decompose.py` 引入了一个常见的结构化建模思路：
 
 > **把“常态水平”与“节假日/春运增量”拆开建模**，最后再组合。
 
@@ -130,7 +102,7 @@
 
 ---
 
-## 7. 数据泄露与评估污染：需要重点警惕的点
+## 5. 数据泄露与评估污染：需要重点警惕的点
 
 本仓库已明确规避的典型泄露：
 - group stats 只用训练年 y 计算后再映射到 2025
@@ -142,14 +114,9 @@
 
 ---
 
-## 8. 输出字段解释（常用）
+## 6. 输出字段解释（常用）
 
-标准管线 `data/pred_2025_optimized.csv` 可能出现的列：
-- `pred_recursive`：递归预测
-- `pred_tminus2`：t-2 预测
-- `pred_tminus2_calibrated`：t-2 + 纠偏（若启用）
-
-分解建模分支可能输出：
+`data/pred_2025_optimized.csv`（由 `train_decompose` 生成）会输出：
 - `pred_tminus2_baseline`：常态基线
 - `pred_tminus2_baseline_cf`：反事实基线
 - `pred_tminus2_uplift_cny / pred_tminus2_uplift_holiday`：增量项
@@ -163,4 +130,3 @@
 - 全年图看整体偏差与节假日峰值拟合
 - 春运窗口图看 `days_to_cny` 周期内是否跟住“节前上冲→除夕/初一低谷→节后回落”的形状
 - `baseline_cf` 曲线偏低是预期现象：它代表“无假期效应的底座”，而不是最终预测
-

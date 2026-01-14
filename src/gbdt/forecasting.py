@@ -1,23 +1,13 @@
 import numpy as np
 import pandas as pd
 
-from src.gbdt.predict import dynamic_row, predict_one
+from src.gbdt.predict import predict_one
 
 
 def _predict_one_day(model, base_row, dyn_features, feature_cols):
     row = pd.concat([base_row, pd.Series(dyn_features)])
     row_df = row[feature_cols].to_frame().T.astype(np.float32)
     return float(predict_one(model, row_df))
-
-
-def predict_recursive_series(model, base, y, feature_cols, dynamic_cols, target_mask):
-    pred = y.astype(float).copy()
-    base_cols = [c for c in feature_cols if c not in dynamic_cols]
-    for idx in np.where(target_mask)[0]:
-        dyn = dynamic_row(pred, idx)
-        base_row = base.loc[idx, base_cols]
-        pred.iloc[idx] = _predict_one_day(model, base_row, dyn, feature_cols)
-    return pred
 
 
 def predict_tminus2_series(model, base, y, feature_cols, dynamic_cols, target_mask, delay=2):
@@ -119,4 +109,3 @@ def predict_tminus2_series(model, base, y, feature_cols, dynamic_cols, target_ma
         pred.iloc[idx] = _predict_one_day(model, base_row, dyn, feature_cols)
 
     return pred
-

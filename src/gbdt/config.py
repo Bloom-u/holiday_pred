@@ -6,17 +6,12 @@ DATA_PATH = Path("data/new_data.xlsx")
 OUTPUT_PRED_PATH = Path("data/pred_2025_optimized.csv")
 FIG_DIR = Path("figs")
 MODEL_DIR = Path("models/gbdt")
-MODEL_PATH = MODEL_DIR / "best_model.json"
-MODEL_PATH_RECURSIVE = MODEL_DIR / "best_model_recursive.json"
-MODEL_PATH_TMINUS2 = MODEL_DIR / "best_model_tminus2.json"
 MODEL_PATH_TMINUS2_BASELINE = MODEL_DIR / "best_model_tminus2_baseline.json"
 MODEL_PATH_TMINUS2_BASELINE_CF = MODEL_DIR / "best_model_tminus2_baseline_cf.json"
 MODEL_PATH_TMINUS2_UPLIFT = MODEL_DIR / "best_model_tminus2_uplift.json"
 MODEL_PATH_TMINUS2_UPLIFT_CNY = MODEL_DIR / "best_model_tminus2_uplift_cny.json"
 MODEL_PATH_TMINUS2_UPLIFT_HOLIDAY = MODEL_DIR / "best_model_tminus2_uplift_holiday.json"
-MODEL_PATH_TMINUS2_CNY_DELTA = MODEL_DIR / "best_model_tminus2_cny_delta.json"
 STATS_PATH = MODEL_DIR / "group_stats.json"
-CALIB_PATH = MODEL_DIR / "calibration.json"
 FORECAST_YEAR = 2025
 
 CNY_DATES = {

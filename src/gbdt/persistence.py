@@ -38,14 +38,3 @@ def load_group_stats(path):
         "holiday_type_std": _deserialize_map(data["holiday_type_std"], int),
         "cny_offset_mean": _deserialize_map(data["cny_offset_mean"], int),
     }
-
-
-def save_calibration(path, calibration):
-    data = {str(k): float(v) for k, v in calibration.items()}
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-
-
-def load_calibration(path):
-    data = json.loads(path.read_text(encoding="utf-8"))
-    return {str(k): float(v) for k, v in data.items()}
